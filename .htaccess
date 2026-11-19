@@ -1,0 +1,44 @@
+# ============================================================================
+# AprovaAI - Configuração Apache / cPanel (Prevenção de Erro 500)
+# ============================================================================
+
+# Desabilitar listagem de diretórios
+<IfModule mod_autoindex.c>
+    Options -Indexes
+</IfModule>
+
+# Definir index.php como padrão
+DirectoryIndex index.php index.html
+
+# Proteger arquivos sensíveis e de documentação contra acesso HTTP direto
+<FilesMatch "^(\.user\.ini|\.htaccess|database\.sql|DOCS\.md)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Bloquear acesso direto às pastas internas config/, includes/ e .git/
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^(config|includes|\.git)(/|$) - [F,L]
+</IfModule>
+
+# Limites de Upload encapsulados para mod_php7 (Apache Handler)
+<IfModule mod_php7.c>
+    php_value upload_max_filesize 64M
+    php_value post_max_size 64M
+    php_value max_execution_time 120
+    php_value memory_limit 256M
+</IfModule>
+
+# Limites de Upload encapsulados para LiteSpeed / CloudLinux (lsapi_module)
+<IfModule lsapi_module>
+    php_value upload_max_filesize 64M
+    php_value post_max_size 64M
+    php_value max_execution_time 120
+    php_value memory_limit 256M
+</IfModule>
