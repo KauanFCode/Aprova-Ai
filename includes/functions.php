@@ -130,6 +130,44 @@ function generate_public_token($bytes = 24)
 }
 
 /**
+ * Normaliza o array $_FILES quando o input possui o atributo multiple.
+ *
+ * @param array $filesEntry Item de $_FILES (ex: $_FILES['media_files'])
+ * @return array Lista de arquivos individuais no formato padrão de $_FILES
+ */
+function normalize_files_array($filesEntry)
+{
+    $normalized = array();
+
+    if (!isset($filesEntry['name'])) {
+        return $normalized;
+    }
+
+    if (!is_array($filesEntry['name'])) {
+        if ((int)$filesEntry['error'] !== UPLOAD_ERR_NO_FILE) {
+            $normalized[] = $filesEntry;
+        }
+        return $normalized;
+    }
+
+    $count = count($filesEntry['name']);
+    for ($i = 0; $i < $count; $i++) {
+        if ((int)$filesEntry['error'][$i] === UPLOAD_ERR_NO_FILE) {
+            continue;
+        }
+        $normalized[] = array(
+            'name'     => $filesEntry['name'][$i],
+            'type'     => isset($filesEntry['type'][$i]) ? $filesEntry['type'][$i] : '',
+            'tmp_name' => $filesEntry['tmp_name'][$i],
+            'error'    => $filesEntry['error'][$i],
+            'size'     => $filesEntry['size'][$i],
+        );
+    }
+
+    return $normalized;
+}
+
+/**
  * Realiza o upload seguro de imagem ou vídeo para uploads/{tenant_id}/.
  * Cria o diretório automaticamente caso não exista.
  *
@@ -315,4 +353,165 @@ function json_response($data, $statusCode = 200)
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode($data, JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+// ============================================================================
+// HELPERS DE PASTAS / CAMPANHAS (Multi-Tenant)
+// ============================================================================
+
+/**
+ * Cria uma nova pasta/campanha para um cliente do tenant.
+ *
+ * @param PDO    $pdo
+ * @param int    $tenantId
+ * @param int    $clientId
+ * @param string $name
+ * @param string $description
+ * @return array ['success' => bool, 'folder_id' => int, 'public_token' => string, 'error' => string]
+ */
+function create_folder(PDO $pdo, $tenantId, $clientId, $name, $description = '')
+{
+    $tenantId    = (int)$tenantId;
+    $clientId    = (int)$clientId;
+    $name        = trim((string)$name);
+    $description = trim((string)$description);
+
+    if ($name === '') {
+        return array('success' => false, 'error' => 'Informe o nome da pasta ou campanha.');
+    }
+
+    $clientCheck = $pdo->prepare('SELECT id FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1');
+    $clientCheck->execute(array($clientId, $tenantId));
+    if (!$clientCheck->fetch()) {
+        return array('success' => false, 'error' => 'Cliente inválido para esta agência.');
+    }
+
+    $publicToken = generate_public_token(24);
+    $stmt = $pdo->prepare(
+        'INSERT INTO folders (tenant_id, client_id, name, description, public_token)
+         VALUES (?, ?, ?, ?, ?)'
+    );
+    $stmt->execute(array(
+        $tenantId,
+        $clientId,
+        $name,
+        $description !== '' ? $description : null,
+        $publicToken,
+    ));
+
+    return array(
+        'success'      => true,
+        'folder_id'    => (int)$pdo->lastInsertId(),
+        'public_token' => $publicToken,
+    );
+}
+
+/**
+ * Lista todas as pastas de um tenant com contagem de criativos e aprovações.
+ *
+ * @param PDO $pdo
+ * @param int $tenantId
+ * @param int $clientId Filtro opcional por cliente (0 = todos)
+ * @return array
+ */
+function get_folders_by_tenant(PDO $pdo, $tenantId, $clientId = 0)
+{
+    $sql = "SELECT f.*, cl.name AS client_name,
+                   COUNT(c.id) AS total_creatives,
+                   SUM(CASE WHEN c.status = 'approved' THEN 1 ELSE 0 END) AS approved_creatives,
+                   SUM(CASE WHEN c.status = 'changes_requested' THEN 1 ELSE 0 END) AS changes_creatives,
+                   SUM(CASE WHEN c.status = 'pending' THEN 1 ELSE 0 END) AS pending_creatives
+            FROM folders f
+            INNER JOIN clients cl ON cl.id = f.client_id
+            LEFT JOIN creatives c ON c.folder_id = f.id
+            WHERE f.tenant_id = ?";
+    $params = array((int)$tenantId);
+
+    if ((int)$clientId > 0) {
+        $sql .= ' AND f.client_id = ?';
+        $params[] = (int)$clientId;
+    }
+
+    $sql .= ' GROUP BY f.id ORDER BY f.created_at DESC, f.id DESC';
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Busca uma pasta específica pelo ID com isolamento estrito por tenant_id.
+ *
+ * @param PDO $pdo
+ * @param int $folderId
+ * @param int $tenantId
+ * @return array|false
+ */
+function get_folder_by_id(PDO $pdo, $folderId, $tenantId)
+{
+    $stmt = $pdo->prepare(
+        "SELECT f.*, cl.name AS client_name,
+                COUNT(c.id) AS total_creatives,
+                SUM(CASE WHEN c.status = 'approved' THEN 1 ELSE 0 END) AS approved_creatives
+         FROM folders f
+         INNER JOIN clients cl ON cl.id = f.client_id
+         LEFT JOIN creatives c ON c.folder_id = f.id
+         WHERE f.id = ? AND f.tenant_id = ?
+         GROUP BY f.id
+         LIMIT 1"
+    );
+    $stmt->execute(array((int)$folderId, (int)$tenantId));
+    return $stmt->fetch();
+}
+
+/**
+ * Busca uma pasta pública pelo public_token para exibição ao cliente.
+ *
+ * @param PDO    $pdo
+ * @param string $publicToken
+ * @return array|false
+ */
+function get_folder_by_token(PDO $pdo, $publicToken)
+{
+    $stmt = $pdo->prepare(
+        "SELECT f.*, cl.name AS client_name, t.name AS tenant_name,
+                COUNT(c.id) AS total_creatives,
+                SUM(CASE WHEN c.status = 'approved' THEN 1 ELSE 0 END) AS approved_creatives
+         FROM folders f
+         INNER JOIN clients cl ON cl.id = f.client_id
+         INNER JOIN tenants t ON t.id = f.tenant_id
+         LEFT JOIN creatives c ON c.folder_id = f.id
+         WHERE f.public_token = ?
+         GROUP BY f.id
+         LIMIT 1"
+    );
+    $stmt->execute(array((string)$publicToken));
+    return $stmt->fetch();
+}
+
+/**
+ * Calcula percentual e texto de progresso de aprovação de uma pasta.
+ *
+ * @param int $approvedCount
+ * @param int $totalCount
+ * @return array ['approved' => int, 'total' => int, 'percent' => int, 'label' => string]
+ */
+function get_folder_progress($approvedCount, $totalCount)
+{
+    $approved = (int)$approvedCount;
+    $total    = (int)$totalCount;
+    $percent  = $total > 0 ? (int)round(($approved / $total) * 100) : 0;
+
+    if ($total === 0) {
+        $label = 'Nenhum criativo na pasta ainda';
+    } else {
+        $label = $approved . ' de ' . $total . ' criativo(s) aprovado(s)';
+    }
+
+    return array(
+        'approved' => $approved,
+        'total'    => $total,
+        'percent'  => $percent,
+        'label'    => $label,
+    );
 }

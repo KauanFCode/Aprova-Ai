@@ -178,7 +178,69 @@ function render_flash_alert()
 }
 
 /**
- * Renderiza o card de um criativo no grid do Dashboard.
+ * Renderiza o card de uma Pasta / Campanha no Dashboard.
+ *
+ * @param array $folder Linha associativa da pasta com client_name, total_creatives e approved_creatives
+ * @return void
+ */
+function render_folder_card($folder)
+{
+    $id          = (int)$folder['id'];
+    $name        = e($folder['name']);
+    $clientName  = e($folder['client_name']);
+    $description = isset($folder['description']) ? trim((string)$folder['description']) : '';
+    $progress    = get_folder_progress($folder['approved_creatives'], $folder['total_creatives']);
+    $folderLink  = e(base_url('review.php?folder=' . $folder['public_token']));
+
+    $barColor = ($progress['total'] > 0 && $progress['approved'] === $progress['total'])
+        ? 'bg-emerald-500'
+        : 'bg-indigo-600';
+
+    echo '<div class="bg-white rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-md transition p-5 flex flex-col justify-between gap-4">';
+    echo '<div>';
+    echo '<div class="flex items-start justify-between gap-3">';
+    echo '<div class="flex items-center gap-3 min-w-0">';
+    echo '<div class="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">';
+    echo '<i data-lucide="folder-kanban" class="w-5 h-5"></i>';
+    echo '</div>';
+    echo '<div class="min-w-0">';
+    echo '<div class="text-[11px] font-semibold text-indigo-600 uppercase tracking-wide truncate">' . $clientName . '</div>';
+    echo '<a href="folder_view.php?id=' . $id . '" class="block text-base font-bold text-slate-900 hover:text-indigo-600 transition truncate">' . $name . '</a>';
+    echo '</div>';
+    echo '</div>';
+    echo '<span class="shrink-0 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">' . $progress['approved'] . '/' . $progress['total'] . '</span>';
+    echo '</div>';
+
+    if ($description !== '') {
+        echo '<p class="mt-2.5 text-xs text-slate-500 line-clamp-2">' . e($description) . '</p>';
+    }
+
+    // Barra de Progresso
+    echo '<div class="mt-4">';
+    echo '<div class="flex items-center justify-between text-xs text-slate-500 mb-1.5">';
+    echo '<span>' . e($progress['label']) . '</span>';
+    echo '<span class="font-semibold text-slate-700">' . $progress['percent'] . '%</span>';
+    echo '</div>';
+    echo '<div class="w-full h-2 rounded-full bg-slate-100 overflow-hidden">';
+    echo '<div class="h-full rounded-full transition-all duration-300 ' . $barColor . '" style="width: ' . $progress['percent'] . '%"></div>';
+    echo '</div>';
+    echo '</div>';
+    echo '</div>';
+
+    // Ações da Pasta
+    echo '<div class="pt-3 border-t border-slate-100 flex items-center gap-2">';
+    echo '<a href="folder_view.php?id=' . $id . '" class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition">';
+    echo '<i data-lucide="folder-open" class="w-3.5 h-3.5"></i> Abrir Pasta';
+    echo '</a>';
+    echo '<button type="button" onclick="copyMagicLink(\'' . $folderLink . '\', this)" class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition">';
+    echo '<i data-lucide="link" class="w-3.5 h-3.5"></i> <span>Copiar Link da Pasta</span>';
+    echo '</button>';
+    echo '</div>';
+    echo '</div>';
+}
+
+/**
+ * Renderiza o card de um criativo no grid do Dashboard ou Pasta.
  *
  * @param array $creative Linha associativa do criativo com client_name e feedback_count
  * @return void
@@ -396,8 +458,8 @@ function fallbackCopyText(text) {
     document.body.removeChild(input);
 }
 
-function seekVideoTo(timestampStr) {
-    var video = document.getElementById('creative-video-player');
+function seekVideoTo(timestampStr, targetVideoId) {
+    var video = document.getElementById(targetVideoId || 'creative-video-player');
     if (!video || !timestampStr) return;
 
     var parts = timestampStr.split(':').map(Number);
